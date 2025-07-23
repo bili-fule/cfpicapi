@@ -4,5 +4,4 @@ main = "index.js"     # 你的入口文件路径
 compatibility_date = "2025-07-23"
 
 [[r2_buckets]]
-binding = "IMAGE_BUCKET"
-bucket_name = "koishi" # <-- 确保这是你正确的R2存储桶名称
+binding = "koishi"
