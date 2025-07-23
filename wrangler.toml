@@ -1,6 +1,6 @@
 # wrangler.toml
 name = "random-image-api" # 你的Worker名称
-main = "src/index.js"     # 你的入口文件路径
+main = "index.js"     # 你的入口文件路径
 compatibility_date = "2025-07-23"
 
 [[r2_buckets]]
