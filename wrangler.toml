@@ -5,3 +5,4 @@ compatibility_date = "2025-07-23"
 
 [[r2_buckets]]
 binding = "koishi"
+bucket_name = "koishi" # <-- 确保这是你正确的R2存储桶名称
