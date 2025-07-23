@@ -1,6 +1,8 @@
-// index.js 
- 
-// --- 静态资源 (保持不变) ---
+// index.js
+
+/**
+ * --- 静态资源 ---
+ */
 const STYLE_CSS = `
 /* --- 复古终端风格样式 --- */
 @import url('https://fonts.googleapis.com/css2?family=VT323&display=swap');
@@ -49,25 +51,31 @@ footer {
 }`;
 
 // --- 新增配置 ---
-// 如果你的文件被上传到了一个额外的子目录中，请在这里指定它。
-// 例如，如果你的存储桶是 'koishi'，文件路径是 'koishi/a_tag_name/...'，
-// 那么这里就填 "koishi/"。
-// 如果文件在根目录，就留空 ""。
+// 由于文件被上传到了一个额外的子目录中，我们在这里指定这个前缀。
 const BASE_PATH_PREFIX = "koishi/";
 
-// --- 配置区 (保持不变) ---
+// --- 配置区 ---
 const AVAILABLE_ORIENTATIONS = ['horizontal', 'vertical', 'square'];
 
 /**
- *  主 Worker 对象 (保持不变)
+ *  主 Worker 对象，包含路由逻辑
  */
 export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
         const path = url.pathname;
-        if (path === '/') return handleIndexRequest(request, env);
-        if (path.startsWith('/api')) return handleApiRequest(request, env);
-        if (path === '/style.css') return handleCssRequest();
+
+        // 路由器
+        if (path === '/') {
+            return handleIndexRequest(request, env);
+        }
+        if (path.startsWith('/api')) {
+            return handleApiRequest(request, env);
+        }
+        if (path === '/style.css') {
+            return handleCssRequest();
+        }
+
         return new Response('Not Found', { status: 404 });
     },
 };
@@ -79,37 +87,27 @@ function handleCssRequest() {
     return new Response(STYLE_CSS, {
         headers: {
             'Content-Type': 'text/css; charset=utf-8',
-            'Cache-Control': 'public, max-age=86400' // 缓存一天
+            'Cache-Control': 'public, max-age=86400'
         }
     });
 }
 
 /**
  * 处理器：处理 / (首页) 请求
- * @param {Request} request
- * @param {object} env
  */
 async function handleIndexRequest(request, env) {
     const bucket = env.IMAGE_BUCKET;
     if (!bucket) return new Response('Server configuration error: R2 bucket not bound.', { status: 500 });
 
     try {
-        // --- 修改点 1：修改 list 逻辑以查找子目录中的标签 ---
-        // 我们现在要列出 BASE_PATH_PREFIX 下的目录
         const listResult = await bucket.list({ prefix: BASE_PATH_PREFIX, delimiter: '/' });
         if (!listResult.delimitedPrefixes.length) {
             return new Response('Server configuration error: No tag directories found in bucket subdirectory.', { status: 500 });
         }
-        
-        // 从 "koishi/a_tag_name/" 中提取出 "a_tag_name"
-        const fullTagPrefix = listResult.delimitedPrefixes[0]; // e.g., "koishi/a_tag_name/"
+        const fullTagPrefix = listResult.delimitedPrefixes[0];
         const tagName = fullTagPrefix.substring(BASE_PATH_PREFIX.length).slice(0, -1);
-        
-        if (!tagName) {
-             return new Response('Could not determine tag name from R2 structure.', { status: 500 });
-        }
+        if (!tagName) return new Response('Could not determine tag name from R2 structure.', { status: 500 });
 
-        // --- 修改点 2：在获取 manifest 时添加前缀 ---
         const manifestPromises = AVAILABLE_ORIENTATIONS.map(orient =>
             bucket.get(`${BASE_PATH_PREFIX}${tagName}/${orient}/manifest.json`)
         );
@@ -131,9 +129,8 @@ async function handleIndexRequest(request, env) {
         }
 
         const url = new URL(request.url);
-        const apiBaseUrl = `${url.origin}/api`; // API的URL是相对于当前域的/api
+        const apiBaseUrl = `${url.origin}/api`;
 
-        // 生成HTML
         const html = generateHtml({
             tagName: tagName,
             totalCount: totalCount,
@@ -151,42 +148,38 @@ async function handleIndexRequest(request, env) {
     }
 }
 
-
 /**
  * 处理器：处理 /api 请求
- * @param {Request} request
- * @param {object} env
  */
 async function handleApiRequest(request, env) {
     const bucket = env.IMAGE_BUCKET;
     if (!bucket) return sendJsonError('R2 bucket not bound.', 500);
 
     try {
-        // --- 修改点 3：同样修改 list 逻辑以查找子目录中的标签 ---
         const listResult = await bucket.list({ prefix: BASE_PATH_PREFIX, delimiter: '/' });
         if (!listResult.delimitedPrefixes.length) {
             return sendJsonError('图片库目录未找到或为空。', 500);
         }
         const fullTagPrefix = listResult.delimitedPrefixes[0];
         const tagName = fullTagPrefix.substring(BASE_PATH_PREFIX.length).slice(0, -1);
-        
-        if (!tagName) {
-             return sendJsonError('Could not determine tag name from R2 structure.', 500);
-        }
+        if (!tagName) return sendJsonError('Could not determine tag name from R2 structure.', 500);
 
-        // ... 获取 orientation 参数的逻辑保持不变 ...
         const url = new URL(request.url);
         const orientation = url.searchParams.get('orientation') || 'any';
-        
+
+        if (orientation !== 'any' && !AVAILABLE_ORIENTATIONS.includes(orientation)) {
+            return sendJsonError(`无效的 orientation 参数。可用值: ${AVAILABLE_ORIENTATIONS.join(', ')}, any`);
+        }
+
         let finalImageName, finalImageOrientation;
 
         if (orientation === 'any') {
             const masterImageList = [];
-            // --- 修改点 4：在获取所有 manifest 时添加前缀 ---
             const manifestPromises = AVAILABLE_ORIENTATIONS.map(orient =>
                 bucket.get(`${BASE_PATH_PREFIX}${tagName}/${orient}/manifest.json`).then(obj => obj ? obj.json() : [])
             );
             const allLists = await Promise.all(manifestPromises);
+
             allLists.forEach((imageList, index) => {
                 const orient = AVAILABLE_ORIENTATIONS[index];
                 if (Array.isArray(imageList)) {
@@ -200,7 +193,6 @@ async function handleApiRequest(request, env) {
             finalImageName = randomEntry.file;
             finalImageOrientation = randomEntry.orientation;
         } else {
-            // --- 修改点 5：在获取特定 manifest 时添加前缀 ---
             const manifestKey = `${BASE_PATH_PREFIX}${tagName}/${orientation}/manifest.json`;
             const manifestObject = await bucket.get(manifestKey);
             if (!manifestObject) return sendJsonError(`指定的分类 '${orientation}' 不存在或缺少 manifest.json 文件。`, 404);
@@ -212,11 +204,10 @@ async function handleApiRequest(request, env) {
             finalImageOrientation = orientation;
         }
 
-        // --- 修改点 6：在构建最终图片 Key 时添加前缀 ---
         const imageKey = `${BASE_PATH_PREFIX}${tagName}/${finalImageOrientation}/${finalImageName}`;
         const imageObject = await bucket.get(imageKey);
-        
         if (imageObject === null) return sendJsonError(`选中的图片文件 '${finalImageName}' 不存在。`, 500);
+
         const headers = new Headers();
         imageObject.writeHttpMetadata(headers);
         headers.set('etag', imageObject.httpEtag);
@@ -231,9 +222,87 @@ async function handleApiRequest(request, env) {
     }
 }
 
-// 确保把之前省略的函数也包含进来
-/*
-function handleCssRequest() { ... }
-function sendJsonError(message, status = 400) { ... }
-function generateHtml(data) { ... }
-*/
+
+/**
+ * 辅助函数：发送JSON错误
+ */
+function sendJsonError(message, status = 400) {
+    return new Response(JSON.stringify({ error: message }), {
+        status: status,
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    });
+}
+
+/**
+ * 辅助函数：根据动态数据生成HTML
+ */
+function generateHtml(data) {
+    return `
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>~//: 随机图床 API v1.0 ://~</title>
+    <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>小石头随机图床API<span id="cursor">_</span></h1>
+            <p class="subtitle">>>> 一个为爱发电的随机图片API, 由Cloudflare Workers强力驱动。</p>
+            <p>>>> 当前图库: [ <strong>${data.tagName}</strong> ]</p>
+        </header>
+        <main>
+            <fieldset>
+                <legend>API 使用说明</legend>
+                <p>本API通过直接输出图片的方式工作，可以直接在 \`<img>\` 标签或CSS的 \`url()\` 中使用。</p>
+                
+                <h3>// 基本接口 (完全随机)</h3>
+                <p>从所有图片中随机返回一张 (总计: ${data.totalCount} 张)。</p>
+                <code>${data.apiBaseUrl}</code>
+                <a href="${data.apiBaseUrl}" class="try-button" target="_blank">[ 执行 ]</a>
+
+                <h3>// 分类接口 (指定方向)</h3>
+                <p>通过添加 \`orientation\` 参数来获取特定方向的图片。</p>
+                <ul>
+                    <li>
+                        <strong>获取横图 (horizontal)</strong>
+                        <span class="count">[当前数量: ${data.imageCounts.horizontal}]</span>
+                        <code>${data.apiBaseUrl}?orientation=horizontal</code>
+                        <a href="${data.apiBaseUrl}?orientation=horizontal" class="try-button" target="_blank">[ 执行 ]</a>
+                    </li>
+                    <li>
+                        <strong>获取竖图 (vertical)</strong>
+                        <span class="count">[当前数量: ${data.imageCounts.vertical}]</span>
+                        <code>${data.apiBaseUrl}?orientation=vertical</code>
+                        <a href="${data.apiBaseUrl}?orientation=vertical" class="try-button" target="_blank">[ 执行 ]</a>
+                    </li>
+                    <li>
+                        <strong>获取方图 (square)</strong>
+                        <span class="count">[当前数量: ${data.imageCounts.square}]</span>
+                        <code>${data.apiBaseUrl}?orientation=square</code>
+                        <a href="${data.apiBaseUrl}?orientation=square" class="try-button" target="_blank">[ 执行 ]</a>
+                    </li>
+                </ul>
+            </fieldset>
+            <fieldset>
+                <legend>使用示例</legend>
+                <p>下面这张图片就是通过调用 \`/api\` 随机获取的：</p>
+                <div class="image-preview-container">
+                    <div class="image-preview">
+                        <img src="/api?t=${Date.now()}" alt="随机图片">
+                    </div>
+                </div>
+                <small>（刷新页面可看到不同的图片...）</small>
+            </fieldset>
+        </main>
+        <footer>
+            <p>STATUS: OK. SYSTEM READY.</p>
+            <p>由fulie构建。</p>
+        </footer>
+    </div>
+</body>
+</html>`;
+}
